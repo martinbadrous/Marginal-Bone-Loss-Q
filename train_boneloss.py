@@ -93,7 +93,8 @@ class CSVDataset(Dataset):
     - image_path can be relative to images_root or absolute
     - label can be class string or integer
     """
-    def __init__(self, csv_path: Path, images_root: Optional[Path], transform=None, class_to_idx: Optional[Dict[str,int]] = None):
+    def __init__(self, csv_path: Path, images_root: Optional[Path], transform=None,
+                 class_to_idx: Optional[Dict[str, int]] = None):
         self.items = []
         with open(csv_path, "r", encoding="utf-8") as f:
             header = f.readline().strip().split(",")
@@ -110,14 +111,20 @@ class CSVDataset(Dataset):
         self.transform = transform
         # build class_to_idx if not provided
         if class_to_idx is None:
-            classes = sorted({lbl for _, lbl in self.items})
-            # allow numeric labels
+            classes = [lbl for _, lbl in self.items]
             if all(lbl.isdigit() for lbl in classes):
-                self.class_to_idx = {lbl: int(lbl) for lbl in classes}
+                numeric_labels = sorted({int(lbl) for lbl in classes})
+                self.class_to_idx = {str(num): idx for idx, num in enumerate(numeric_labels)}
             else:
-                self.class_to_idx = {lbl: i for i, lbl in enumerate(classes)}
+                unique = sorted(set(classes))
+                self.class_to_idx = {lbl: i for i, lbl in enumerate(unique)}
         else:
             self.class_to_idx = class_to_idx
+        self.label_lookup: Dict[str, int] = {}
+        for key, idx in self.class_to_idx.items():
+            self.label_lookup[str(key)] = idx
+            if isinstance(key, str):
+                self.label_lookup[key] = idx
 
     def __len__(self):
         return len(self.items)
@@ -131,10 +138,10 @@ class CSVDataset(Dataset):
         if self.transform:
             img = self.transform(img)
         # convert class label
-        if isinstance(lbl, str) and lbl.isdigit():
-            y = int(lbl)
-        else:
-            y = self.class_to_idx[lbl]
+        key = lbl if lbl in self.label_lookup else str(lbl)
+        if key not in self.label_lookup:
+            raise KeyError(f"Label '{lbl}' not found in class_to_idx mapping")
+        y = self.label_lookup[key]
         return img, y
 
 def build_transforms(img_size: int, augment: bool, equalize: bool, to_rgb: bool):
@@ -240,10 +247,10 @@ def build_datasets_from_csv(csv_file: Path, images_root: Optional[Path], img_siz
     # targets from mapping
     lbls = []
     for _, lbl in base.items:
-        if isinstance(lbl, str) and lbl.isdigit():
-            lbls.append(int(lbl))
-        else:
-            lbls.append(base.class_to_idx[lbl])
+        key = lbl if lbl in base.label_lookup else str(lbl)
+        if key not in base.label_lookup:
+            raise KeyError(f"Label '{lbl}' not found in CSV class mapping")
+        lbls.append(base.label_lookup[key])
     train_idx, val_idx, test_idx = stratified_split_indices(lbls, val_split, test_split, seed)
     ds_train = CSVDataset(csv_file, images_root, transform=train_tf, class_to_idx=base.class_to_idx)
     ds_val   = CSVDataset(csv_file, images_root, transform=eval_tf,  class_to_idx=base.class_to_idx)
